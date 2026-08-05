@@ -55,6 +55,8 @@ def parse_log_text(log_content: str) -> pl.DataFrame:
 def load_logs(source: Union[str, Path]) -> pl.DataFrame:
     """Loads and parses log data from a file path or direct string content."""
     path = Path(source) if isinstance(source, str) and not source.count("\n") else None
+
+    print(path)
     
     if path and path.is_file():
         content = path.read_text(encoding="utf-8")
@@ -71,7 +73,9 @@ Traceback (most recent call last):
   File "C:\\Users\\Gerard\\Desktop\\SleepHabits\\backend\\main.py", line 73, in train
     results = train_pipeline(n_trials=payload.n_trials)
 TypeError: OrdinalEncoder.__init__() takes 1 positional argument but 2 were given"""
+
+    from config.settings import LOGS_PATH
     
-    df = load_logs(sample_log)
+    df = load_logs(str(LOGS_PATH))
     print(df)
     print("Schema:", df.schema)

@@ -59,11 +59,11 @@ class BaseEngine(ABC):
 
     @require_connection
     def delete_filter(self, filter:str) -> Any:
-        return self._delete_filter
+        return self._delete_filter(filter)
 
     @require_connection
     def get_by_id(self, record_id:str) -> Any:
-        return self._get_by_id
+        return self._get_by_id(record_id)
 
     # --- Internal Abstract Hooks (Overridden by concrete backends) --- 
     
