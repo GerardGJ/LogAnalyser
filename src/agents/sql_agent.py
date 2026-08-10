@@ -9,6 +9,7 @@ from src.tools.database import (
     sql_db_query_checker,
     sql_db_schema,
 )
+from src.security.pii_scrubber import scrub_text
 
 load_dotenv()
 
@@ -59,9 +60,12 @@ def query_log_agent_with_retry(
     for attempt in range(1, max_retries + 1):
         try:
             print(f"\n🤖 [Attempt {attempt}/{max_retries}] Processing question...")
+
+            # Scrub the prompt
+            srubed_prompt = scrub_text(current_prompt)
             
             # Execute agent graph
-            result = agent.invoke({"messages": [("user", current_prompt)]})
+            result = agent.invoke({"messages": [("user", srubed_prompt)]})
             
             # Extract final response from agent's state
             final_message = result["messages"][-1].content

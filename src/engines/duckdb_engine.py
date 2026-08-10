@@ -4,6 +4,7 @@ import duckdb
 import polars as pl
 
 from src.engines.relational_engine import RelationalEngine
+from src.security.pii_scrubber import scrub_dataframe
 
 
 class DuckDBEngine(RelationalEngine):
@@ -45,7 +46,8 @@ class DuckDBEngine(RelationalEngine):
             result = self._conn.execute(query)
 
         # Convert DuckDB result set directly to a Polars DataFrame
-        return result.pl()
+        scrubbed_result = scrub_dataframe(result.pl())
+        return scrubbed_result
 
     def _get_schema(self, table_name: str | None = None) -> pl.DataFrame:
         """
