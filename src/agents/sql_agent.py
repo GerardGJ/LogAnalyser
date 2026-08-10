@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
-from src.tools.database import (
+from src.tools.database_tools import (
     sql_db_list_tables,
     sql_db_query,
     sql_db_query_checker,
