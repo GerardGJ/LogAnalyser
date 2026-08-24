@@ -14,6 +14,8 @@ JWT_REGEX = r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\b"
 REDACTED_IP = "[REDACTED_IP]"
 REDACTED_EMAIL = "[REDACTED_EMAIL]"
 REDACTED_KEY = r"\1=[REDACTED_API_KEY]"
+# polars' str.replace_all uses the Rust regex crate, which expects $1 (not \1) for backreferences
+REDACTED_KEY_POLARS = r"${1}=[REDACTED_API_KEY]"
 REDACTED_JWT = "[REDACTED_JWT]"
 
 
@@ -66,7 +68,7 @@ def scrub_dataframe(
         expr = (
             pl.col(col)
             .str.replace_all(JWT_REGEX, REDACTED_JWT)
-            .str.replace_all(API_KEY_REGEX, REDACTED_KEY)
+            .str.replace_all(API_KEY_REGEX, REDACTED_KEY_POLARS)
             .str.replace_all(EMAIL_REGEX, REDACTED_EMAIL)
             .str.replace_all(IPV4_REGEX, REDACTED_IP)
         )

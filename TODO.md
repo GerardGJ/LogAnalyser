@@ -2,7 +2,9 @@
 
 This document tracks the current implementation state against the project objective in `README.md`: a secure, multi-agent conversational system for querying and diagnosing production logs through an engine-agnostic query layer.
 
-Last audit: 2026-08-23
+**Workflow decision (2026-08-24):** this is a solo, personal-project POC — a full `SecurityAgent`/RBAC node is deferred until the Router → SQL/Diagnostic → Synthesizer pipeline is working end-to-end. Regex PII scrubbing (`scrub_text`/`scrub_dataframe`) already runs at the engine and prompt boundaries and stays in place; what's deferred is the *agent* wrapper and RBAC/permission-scoping, which need a real multi-user/role concept the POC doesn't have yet. Revisit once the graph works and there's an actual driver (multi-user access, real secrets in logs). Until then the graph is `RouterNode -> (SQLNode | DiagnosticNode) -> SynthesizerNode`, with `security_agent.py` left as a stub.
+
+Last audit: 2026-08-24
 
 ---
 
@@ -14,10 +16,10 @@ Last audit: 2026-08-23
 | Dependency management | Complete | Project uses `pyproject.toml`/`uv.lock`; README install/test commands now document the `uv` workflow and pytest import paths are configured in `pyproject.toml`. |
 | Log schema | Complete | `LogEntry`, `log_loader.py`, engine tests, and README all use the canonical parsed-file schema (`timestamp`, `level`, `app`, `source_file`, `line_number`, `message`); no `trace_id`/`service` fields remain. |
 | DuckDB engine | Partial | `BaseEngine`, `RelationalEngine`, and `DuckDBEngine` exist, but file ingestion is CSV-only, raw SQL string interpolation remains in places, and tests are not currently runnable. |
-| PII scrubbing | Partial | Regex scrubber exists for emails, IPv4, API keys, and JWTs; no Presidio/NER integration, RBAC, or full unit coverage yet. |
+| PII scrubbing | Partial | Regex scrubber exists for emails, IPv4, API keys, and JWTs, now with unit coverage (`tests/test_pii.py`); no Presidio/NER integration or RBAC yet. |
 | SQL agent | Partial | LangChain agent factory exists, but it depends on live model initialization, uses hard-coded model names, and has a broken `__main__` call. |
 | Diagnostic agent | Partial | Agent factory and stack trace tools exist, but no deterministic tests or graph integration exist. |
-| Security agent | Not started | `src/agents/security_agent.py` exists but is empty. |
+| Security agent | Deferred | `src/agents/security_agent.py` intentionally left empty until Router/Synthesizer are working — see workflow decision above. Regex PII scrubbing at the engine/prompt boundary is unaffected and stays active. |
 | Router/planner agent | Not started | `src/agents/router_agent.py` is missing. |
 | Synthesizer agent | Not started | `src/agents/synthesizer_agent.py` is missing. |
 | LangGraph workflow | Not started | `src/graph/` only contains `__init__.py`; no state or workflow definitions. |
@@ -80,13 +82,16 @@ Last audit: 2026-08-23
 ## Phase 2: Core Agent Logic & Tooling (Medium-High Priority)
 *Objective: implement and unit-test individual tools and agents before wiring them into LangGraph.*
 
-- [~] **2.1 Security and PII redaction pipeline**
+- [~] **2.1 PII redaction pipeline** *(regex scrubbing only — kept in scope; agent/RBAC below are deferred, see workflow decision)*
   - [x] Implement regex-based `scrub_text()` and `scrub_dataframe()`.
-  - [ ] Add unit tests for email, IPv4, JWT, bearer token, API key, and DataFrame redaction cases.
+  - [x] Add unit tests for email, IPv4, JWT, bearer token, API key, and DataFrame redaction cases. `tests/test_pii.py` now has 17 tests across `scrub_text`/`scrub_dataframe`, including multi-PII strings, target-column selection, auto-detected string columns, and empty DataFrames. Found and fixed a real bug while writing these: `scrub_dataframe`'s API-key replacement used the Python `re`-style backreference `\1`, but polars' `str.replace_all` runs on the Rust `regex` crate, which needs `$1`/`${1}` — the DataFrame path was emitting literal `\1=[REDACTED_API_KEY]` instead of redacting. Added a separate `REDACTED_KEY_POLARS` pattern for that call site; `scrub_text` (Python `re.sub`) was unaffected and already correct.
+  - [ ] Ensure outgoing synthesized responses are scrubbed before display (once 2.5 exists).
+
+- [ ] **2.1a `SecurityAgent` and RBAC (Deferred — build after 2.4/2.5 land)**
   - [ ] Decide whether Presidio/NER is in scope for the POC; if yes, add dependency/configuration and tests.
   - [ ] Implement `SecurityAgent` in `src/agents/security_agent.py`.
   - [ ] Add RBAC/scope model and deny/allow behavior for restricted log fields or services.
-  - [ ] Ensure outgoing synthesized responses are scrubbed before display.
+  - Reason to defer: no multi-user/role concept exists yet in this solo POC; building RBAC now would be speculative. Revisit once the Router → SQL/Diagnostic → Synthesizer graph works, or when a real driver (multi-user access, real secrets in logs) appears.
 
 - [~] **2.2 Text-to-SQL generation and self-correction agent**
   - [x] Build SQL agent factory with schema inspection, query checking, execution tools, and retry wrapper.
@@ -124,21 +129,22 @@ Last audit: 2026-08-23
 
 - [ ] **3.1 Shared state definition**
   - [ ] Create `src/graph/state.py`.
-  - [ ] Define `AgentState` fields for raw query, sanitized query, user role/scope, route, SQL query, SQL results, diagnostic input, diagnostic output, errors, metadata, and final response.
-  - [ ] Include a consistent error shape for failed security, routing, SQL, and diagnostic steps.
+  - [ ] Define `AgentState` fields for raw query, route, SQL query, SQL results, diagnostic input, diagnostic output, errors, metadata, and final response. (Omit user role/scope fields until 2.1a lands.)
+  - [ ] Include a consistent error shape for failed routing, SQL, and diagnostic steps.
 
 - [ ] **3.2 Graph node wrappers**
-  - [ ] Implement security node.
   - [ ] Implement router node.
   - [ ] Implement SQL node.
   - [ ] Implement diagnostic node.
   - [ ] Implement synthesizer node.
+  - [ ] (Deferred) Implement security node once `SecurityAgent` (2.1a) exists.
 
 - [ ] **3.3 Graph assembly and conditional edges**
   - [ ] Create `src/graph/workflow.py`.
-  - [ ] Wire `SecurityNode -> RouterNode -> (SQLNode | DiagnosticNode) -> SynthesizerNode`.
-  - [ ] Add fallback paths for rejected permissions, unsupported intent, query execution errors, and empty results.
+  - [ ] Wire `RouterNode -> (SQLNode | DiagnosticNode) -> SynthesizerNode`.
+  - [ ] Add fallback paths for unsupported intent, query execution errors, and empty results.
   - [ ] Add graph-level tests using mocked agents and a sample DuckDB fixture.
+  - [ ] (Deferred) Prepend `SecurityNode` once 2.1a lands; add rejected-permission fallback path then.
 
 ---
 
@@ -161,8 +167,8 @@ Last audit: 2026-08-23
   - [ ] Metrics scenario: "count errors by app".
   - [ ] Trace scenario: "show events from source_file X" or equivalent canonical identifier.
   - [ ] Diagnostic scenario: "why did the pipeline fail?"
-  - [ ] Security scenario: prompt/logs containing secrets are scrubbed before model context and final output.
-  - [ ] Permission scenario: restricted query is denied or narrowed by `SecurityAgent`.
+  - [ ] Scrubbing scenario: prompt/logs containing secrets are scrubbed before model context and final output (regex scrubber only — already active, not gated on 2.1a).
+  - [ ] (Deferred) Permission scenario: restricted query is denied or narrowed by `SecurityAgent`, once 2.1a lands.
 
 ---
 
@@ -202,8 +208,5 @@ Last audit: 2026-08-23
 Current pytest result:
 
 ```text
-collected 3 items
-tests/test_engines/test_duckdbengine.py .
-tests/test_log_schema.py ..
-3 passed
+65 passed
 ```

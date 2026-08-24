@@ -25,9 +25,11 @@ Modern microservice architectures generate massive volumes of log data across di
 
 The **Production Log Analyzer** solves this challenge by providing:
 * **Natural Language Telemetry Interface:** Converts plain English user queries into optimized, execution-engine queries (e.g., Text-to-SQL).
-* **Multi-Agent Collaborative Intelligence:** Decouples complex analytical workflows—such as security checks, SQL query generation, error stack-trace diagnosis, and synthesis—into specialized, deterministic AI agents.
+* **Multi-Agent Collaborative Intelligence:** Decouples complex analytical workflows—such as SQL query generation, error stack-trace diagnosis, and response synthesis—into specialized, deterministic AI agents.
 * **Engine-Agnostic Query Layer:** Currently parses the standard application text-log format (see [Standard Log Schema](#standard-log-schema)) for Proof-of-Concept (POC) environments; JSON/CSV/Parquet ingestion and pluggable support for enterprise log databases (ClickHouse, PostgreSQL, Databricks, Snowflake, OpenSearch) are planned but not yet implemented (see `TODO.md`).
-* **Privacy & Security Guardrails:** Enforces Role-Based Access Control (RBAC) and automated PII masking at both ingestion and query execution, ensuring sensitive payload data never leaves the security perimeter.
+* **PII Masking:** Automated regex-based PII scrubbing at both ingestion and query execution, ensuring sensitive payload data never leaves the security perimeter before reaching the LLM.
+
+> **Note on scope:** this is a solo, personal-project POC. A dedicated `SecurityAgent`/RBAC node is intentionally deferred until the Router → SQL/Diagnostic → Synthesizer pipeline works end-to-end — see [Roadmap](#roadmap) and `TODO.md` for the reasoning. Regex PII scrubbing is already implemented and active; RBAC/permission-scoping is not.
 
 ---
 
@@ -36,13 +38,15 @@ The **Production Log Analyzer** solves this challenge by providing:
 * **Multi-Agent Orchestration:** Powered by graph-based workflows (`LangGraph`), ensuring predictable state transitions and deterministic query handling.
 * **Context-Aware Log Sampling:** Avoids context window limits by leveraging SQL for aggregations and using deterministic top-K sampling for stack-trace diagnosis.
 * **Automated SQL Self-Correction:** The Text-to-SQL agent automatically inspects schema definitions and self-corrects syntax errors if database execution fails.
-* **Two-Tier PII Masking:** Built-in regex and Named Entity Recognition (NER) pipeline (via Microsoft Presidio) to scrub API keys, JWTs, emails, and IP addresses before LLM invocation.
+* **PII Masking:** Regex-based scrubbing removes API keys, JWTs, emails, and IP addresses before LLM invocation. A Named Entity Recognition (NER) pipeline (via Microsoft Presidio) and a dedicated `SecurityAgent`/RBAC layer are planned but deferred — see [Roadmap](#roadmap).
 
 ---
 
 ## System Architecture & Workflow
 
 The architecture follows a graph-based multi-agent orchestration design pattern. User prompts pass through a multi-stage execution pipeline where agents interact with database abstractions, PII scrubbers, and context management modules.
+
+**Current target for this POC** (a `SecurityAgent`/RBAC node is deferred — see the note below the diagram):
 
 ```
                                   ┌───────────────────────────┐
@@ -51,19 +55,14 @@ The architecture follows a graph-based multi-agent orchestration design pattern.
                                                 │
                                                 ▼
                                   ┌───────────────────────────┐
-                                  │ 1. Security & RBAC Agent  │
-                                  └─────────────┬─────────────┘
-                                                │
-                                                ▼
-                                  ┌───────────────────────────┐
-                                  │  2. Router / Planner      │
+                                  │  1. Router / Planner      │
                                   └─────────────┬─────────────┘
                                                 │
                         ┌───────────────────────┴───────────────────────┐
                         │                                               │
                         ▼                                               ▼
           ┌───────────────────────────┐                   ┌───────────────────────────┐
-          │  3. Text-to-SQL Agent     │                   │  4. Log Diagnostic Agent  │
+          │  2. Text-to-SQL Agent     │                   │  3. Log Diagnostic Agent  │
           │  (Metrics & Aggregations) │                   │  (Unstructured Traces)    │
           └─────────────┬─────────────┘                   └─────────────┬─────────────┘
                         │                                               │
@@ -71,7 +70,7 @@ The architecture follows a graph-based multi-agent orchestration design pattern.
                                                 │
                                                 ▼
                                   ┌───────────────────────────┐
-                                  │ 5. Synthesizer Agent      │
+                                  │ 4. Synthesizer Agent      │
                                   └─────────────┬─────────────┘
                                                 │
                                                 ▼
@@ -80,28 +79,31 @@ The architecture follows a graph-based multi-agent orchestration design pattern.
                                   └───────────────────────────┘
 ```
 
+> A `Security & RBAC Agent` may be prepended to this graph later (see [Roadmap](#roadmap)). Until then, PII scrubbing runs inline at the engine and prompt boundaries (see [PII Masking & Security Framework](#pii-masking--security-framework)) rather than as its own graph node.
+
 ### Execution Flow Sequence
 
-1. **Authentication & Sanitization (Agent 1):** The user's query and security scope (JWT/Role) enter the Security Agent. PII is scrubbed, and user permissions are validated.
-2. **Intent Planning & Routing (Agent 2):** The Router analyzes the query intent. It routes analytical/metric queries (e.g., *"What is the error rate by app today?"*) to the Text-to-SQL Agent, and deep diagnostic questions (e.g., *"Why is authentication failing?"*) to the Log Diagnostic Agent.
-3. **Execution & Telemetry Fetching (Agents 3 & 4):**
-   * **Text-to-SQL Agent** inspects the target database schema, drafts a SQL query, executes it against the database abstraction layer, and validates the output tabular dataset.
+1. **Intent Planning & Routing (Agent 1):** The Router analyzes the query intent. It routes analytical/metric queries (e.g., *"What is the error rate by app today?"*) to the Text-to-SQL Agent, and deep diagnostic questions (e.g., *"Why is authentication failing?"*) to the Log Diagnostic Agent. The user's prompt is scrubbed for PII before it reaches any model, regardless of route.
+2. **Execution & Telemetry Fetching (Agents 2 & 3):**
+   * **Text-to-SQL Agent** inspects the target database schema, drafts a SQL query, executes it against the database abstraction layer, and validates the output tabular dataset. Query results are scrubbed for PII before being returned.
    * **Log Diagnostic Agent** queries representative sample logs (e.g., top 15-20 failed trace stack traces) to analyze underlying error patterns without exceeding context window constraints.
-4. **Response Synthesis & Formatting (Agent 5):** The Synthesizer compiles query results, execution metadata, and root-cause summaries into a clean, markdown-formatted response while enforcing outgoing PII compliance.
+3. **Response Synthesis & Formatting (Agent 4):** The Synthesizer compiles query results, execution metadata, and root-cause summaries into a clean, markdown-formatted response while enforcing outgoing PII compliance.
 
 ---
 
 ## Multi-Agent Design & Responsibilities
 
-The system divides operational responsibilities across five dedicated agents:
+The system divides operational responsibilities across four dedicated agents, with a fifth (`SecurityAgent`) planned but deferred:
 
 | Agent | Core Responsibility | Input | Output | Primary Tools / Technologies |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Security & RBAC Agent** | Validates user role permissions and sanitizes incoming natural language prompts to scrub sensitive credentials or PII. | Raw User Prompt + User Token | Scrubbed Prompt + Access Scope | Microsoft Presidio, Custom Regex, Auth Scopes |
-| **2. Router / Planner Agent** | Classifies incoming intent and chooses the optimal execution strategy (SQL Aggregation vs. Stack Trace Diagnosis). | Scrubbed Prompt | Routing Target (`sql` \| `diagnostic`) | LangGraph Conditional Routing, Intent Classifier |
-| **3. Text-to-SQL Agent** | Generates dialect-appropriate SQL queries, executes them against the database abstraction layer, and self-corrects syntax errors. | Natural Language Question + Schema | Structured Tabular Data / Aggregations | Database Dialect Engine, Schema Inspector, Query Validator |
-| **4. Log Diagnostic Agent** | Performs semantic inspection and root-cause identification on unstructured log messages, stack traces, and exception frames. | Sampled Log Traces (JSON/Text) | Analytical Root-Cause Summary | Stack Trace Parser, Context Truncator, Exception Profiler |
-| **5. Synthesizer Agent** | Merges structured tables, diagnostic summaries, and execution stats into a coherent, markdown-formatted response. | SQL Outputs + Diagnostic Summaries | Final Natural Language Answer | Markdown Formatter, Response Auditor |
+| **1. Router / Planner Agent** | Classifies incoming intent and chooses the optimal execution strategy (SQL Aggregation vs. Stack Trace Diagnosis). | Scrubbed Prompt | Routing Target (`sql` \| `diagnostic`) | LangGraph Conditional Routing, Intent Classifier |
+| **2. Text-to-SQL Agent** | Generates dialect-appropriate SQL queries, executes them against the database abstraction layer, and self-corrects syntax errors. | Natural Language Question + Schema | Structured Tabular Data / Aggregations | Database Dialect Engine, Schema Inspector, Query Validator |
+| **3. Log Diagnostic Agent** | Performs semantic inspection and root-cause identification on unstructured log messages, stack traces, and exception frames. | Sampled Log Traces (JSON/Text) | Analytical Root-Cause Summary | Stack Trace Parser, Context Truncator, Exception Profiler |
+| **4. Synthesizer Agent** | Merges structured tables, diagnostic summaries, and execution stats into a coherent, markdown-formatted response. | SQL Outputs + Diagnostic Summaries | Final Natural Language Answer | Markdown Formatter, Response Auditor |
+| *(Deferred)* **Security & RBAC Agent** | Would validate user role permissions and sanitize incoming natural language prompts to scrub sensitive credentials or PII as its own graph node. | Raw User Prompt + User Token | Scrubbed Prompt + Access Scope | Microsoft Presidio, Custom Regex, Auth Scopes |
+
+PII scrubbing itself is not deferred — `scrub_text()`/`scrub_dataframe()` already run inline at the prompt and query-result boundaries (see below); what's deferred is wrapping that logic in its own agent node plus RBAC/permission-scoping, since this solo POC has no multi-user/role model yet to scope against.
 
 ---
 
@@ -145,13 +147,12 @@ To maintain engine independence, the system utilizes an abstract database interf
 
 ## PII Masking & Security Framework
 
-To prevent sensitive operational data from leaking to external LLM providers, the system implements a dual-stage PII pipeline:
+To prevent sensitive operational data from leaking to external LLM providers, the system implements regex-based scrubbing (`src/security/pii_scrubber.py`) at two points, independent of any agent orchestration:
 
-1. **Ingestion In-Flight Redaction:** Regex maskers automatically replace key patterns before database ingestion:
-   * **API Keys & Tokens:** `[REDACTED_SECRET]`
-   * **IPv4 / IPv6 Addresses:** `192.168.x.x`
-   * **Email Addresses:** `[REDACTED_EMAIL]`
-2. **Context Guardrails:** The Security Agent scans user questions and limits context window injection size, enforcing explicit `LIMIT` parameters on all generated SQL queries.
+1. **Prompt Scrubbing:** `scrub_text()` sanitizes the user's natural-language prompt before it reaches the SQL agent.
+2. **Query Result Scrubbing:** `scrub_dataframe()` runs inside `DuckDBEngine._execute_query`, scrubbing every query result before it's returned — API keys, JWTs, emails, and IPv4 addresses are redacted.
+
+RBAC, a dedicated `SecurityAgent` node, and Presidio/NER-based detection are **planned but deferred** (see [Roadmap](#roadmap)) — this is a solo POC with no multi-user/role model to scope permissions against yet.
 
 ---
 
@@ -309,9 +310,13 @@ LOG_LEVEL=INFO
 
 ## Roadmap
 
-- [ ] Multi-agent orchestration pipeline using LangGraph.
-- [ ] DuckDB database engine for local log file query handling.
-- [ ] Basic PII scrubbing framework for emails, IPs, and API keys.
+- [x] Basic PII scrubbing framework for emails, IPs, and API keys.
+- [x] DuckDB database engine for local log file query handling.
+- [ ] Router / Planner agent (`src/agents/router_agent.py`).
+- [ ] Synthesizer agent (`src/agents/synthesizer_agent.py`).
+- [ ] Multi-agent orchestration pipeline using LangGraph (`Router -> SQL/Diagnostic -> Synthesizer`).
+- [ ] **Deferred:** `SecurityAgent` + RBAC node. Intentionally sequenced after the graph above works end-to-end — this is a solo personal-project POC with no multi-user/role model yet, so RBAC would be speculative today. Revisit once the graph is stable or a real driver appears (multi-user access, real secrets in logs). See `TODO.md` for the full reasoning.
+- [ ] Presidio/NER-based PII detection (in addition to today's regex scrubbing).
 - [ ] Implement ClickHouse and Elasticsearch engine adapters.
 - [ ] Add streaming response support for real-time log tailing.
 - [ ] Implement automated alert root-cause diagnostic reports.
