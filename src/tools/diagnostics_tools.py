@@ -17,10 +17,13 @@ def parse_stack_trace(raw_log: str) -> str:
     if matches:
         return "\n--- EXTRACTED STACK TRACE ---\n" + "\n".join(matches)
     
-    # Fallback to general exception keywords
+    # Fallback to general exception keywords. Matched case-insensitively since the
+    # project's canonical log schema (LogLevel) emits upper-case levels like "ERROR"
+    # and "FATAL", not the mixed-case "Error" a naive substring check would expect.
+    failure_keywords = ["error", "exception", "critical", "failed", "fatal", "traceback"]
     exception_lines = [
-        line for line in raw_log.split("\n") 
-        if any(kw in line for kw in ["Error", "Exception", "CRITICAL", "FAILED", "Traceback"])
+        line for line in raw_log.split("\n")
+        if any(kw in line.lower() for kw in failure_keywords)
     ]
     
     if exception_lines:
@@ -39,11 +42,14 @@ def sample_and_truncate_logs(log_data: str, max_lines: int = 50) -> str:
     if len(lines) <= max_lines:
         return log_data
 
-    # Strategy: Keep first 15 lines (init/context), middle sampled error lines, and last 20 lines (crash)
-    head = lines[:15]
-    tail = lines[-20:]
-    
-    middle_candidates = lines[15:-20]
+    # Strategy: Keep first 15 lines (init/context), middle sampled error lines, and last 20 lines (crash).
+    # Sizes are clamped to the available line count so head/tail never overlap on short inputs.
+    head_size = min(15, len(lines))
+    tail_size = min(20, len(lines) - head_size)
+    head = lines[:head_size]
+    tail = lines[len(lines) - tail_size:] if tail_size else []
+
+    middle_candidates = lines[head_size: len(lines) - tail_size]
     # Filter middle lines for errors or warnings
     error_middle = [l for l in middle_candidates if any(k in l for k in ["ERROR", "WARN", "FAIL"])]
     sampled_middle = error_middle[:15] if error_middle else middle_candidates[:15]

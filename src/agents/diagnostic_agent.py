@@ -1,8 +1,9 @@
 from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain.chat_models import init_chat_model
 
+from src.security.pii_scrubber import scrub_text
 from src.tools.diagnostics_tools import parse_stack_trace, sample_and_truncate_logs
+from src.utils.config_loader import get_agent_model
 
 load_dotenv()
 
@@ -28,7 +29,7 @@ Output your final analysis using this exact format:
 
 def get_diagnostic_agent():
     """Factory function to instantiate the Diagnostic Agent."""
-    model = init_chat_model("openai:gpt-5.5")
+    model = get_agent_model("diagnostic_agent")
     return create_agent(
         model=model,
         tools=DIAGNOSTIC_TOOLS,
@@ -41,13 +42,14 @@ def diagnose_log_failure(log_payload: str) -> str:
     Public entry point for running root-cause analysis on a log snippet or error message.
     """
     agent = get_diagnostic_agent()
-    
-    prompt = f"Analyze the following log payload and identify the root cause of failure:\n\n{log_payload}"
-    
+
+    scrubbed_payload = scrub_text(log_payload)
+    prompt = f"Analyze the following log payload and identify the root cause of failure:\n\n{scrubbed_payload}"
+
     try:
         result = agent.invoke({"messages": [("user", prompt)]})
         final_message = result["messages"][-1].content
-        return final_message
+        return scrub_text(final_message)
     except Exception as e:
         return f"Diagnostic analysis failed due to error: {e}"
 

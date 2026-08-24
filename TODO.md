@@ -18,7 +18,7 @@ Last audit: 2026-08-24
 | DuckDB engine | Partial | `BaseEngine`, `RelationalEngine`, and `DuckDBEngine` exist, but file ingestion is CSV-only, raw SQL string interpolation remains in places, and tests are not currently runnable. |
 | PII scrubbing | Partial | Regex scrubber exists for emails, IPv4, API keys, and JWTs, now with unit coverage (`tests/test_pii.py`); no Presidio/NER integration or RBAC yet. |
 | SQL agent | Complete | LangChain agent factory, database tools, DDL/DML guardrail, and deterministic tests all in place (`tests/test_sql_agent.py`, `tests/test_database_tools.py`); model config is lazy and `config/agents.yaml`-driven. |
-| Diagnostic agent | Partial | Agent factory and stack trace tools exist, but no deterministic tests or graph integration exist. |
+| Diagnostic agent | Partial | Agent factory, stack trace tools, PII scrubbing, config-driven model, and deterministic tests are all in place (`tests/test_diagnostics_tools.py`, `tests/test_diagnostic_agent.py`); no graph integration exists yet (Phase 3). |
 | Security agent | Deferred | `src/agents/security_agent.py` intentionally left empty until Router/Synthesizer are working — see workflow decision above. Regex PII scrubbing at the engine/prompt boundary is unaffected and stays active. |
 | Router/planner agent | Not started | `src/agents/router_agent.py` is missing. |
 | Synthesizer agent | Not started | `src/agents/synthesizer_agent.py` is missing. |
@@ -102,13 +102,13 @@ Last audit: 2026-08-24
   - [x] Add deterministic tests using fake/mocked LLM responses. `tests/test_sql_agent.py` exercises `query_log_agent_with_retry()` against a scripted fake agent (first-try success, prompt scrubbing, retry-then-succeed, retries-exhausted, agent built once and reused); `tests/test_database_tools.py` covers `_reject_unsafe_query()` and mocks `get_agent_model` for `sql_db_query_checker`.
   - [x] Add integration test against a populated DuckDB fixture once pytest collection is fixed. `tests/test_database_tools.py`'s `populated_tools_engine` fixture points the tools' module-level `engine` at a temp-file-backed DuckDB (not `:memory:`, since the tools reconnect per call — see `CLAUDE.md`) and verifies `sql_db_query`/`sql_db_list_tables`/`sql_db_schema` end-to-end, including that a blocked `DROP TABLE`/stacked statement leaves the table intact and that query results are PII-scrubbed.
 
-- [~] **2.3 Log diagnostic and stack-trace sampling agent**
+- [x] **2.3 Log diagnostic and stack-trace sampling agent**
   - [x] Implement `parse_stack_trace` tool.
   - [x] Implement `sample_and_truncate_logs` tool.
   - [x] Build `DiagnosticAgent` factory and public `diagnose_log_failure()` entry point.
-  - [ ] Add deterministic unit tests for Python traceback extraction, failure-line fallback, truncation behavior, and no-error logs.
-  - [ ] Scrub diagnostic input/output for PII.
-  - [ ] Make model/provider configurable and lazy-loaded.
+  - [x] Add deterministic unit tests for Python traceback extraction, failure-line fallback, truncation behavior, and no-error logs. `tests/test_diagnostics_tools.py` (19 tests) and `tests/test_diagnostic_agent.py` (5 tests, mocked agent). Writing the edge cases surfaced two real bugs, both fixed in `src/tools/diagnostics_tools.py`: (1) `sample_and_truncate_logs`'s head(15)/tail(20) slices overlapped and duplicated lines, and drove the "TRUNCATED N LINES" count negative, whenever the input had fewer than 35 lines but more than `max_lines` — sizes are now clamped to the available line count. (2) `parse_stack_trace`'s fallback keyword filter only matched mixed-case substrings (`"Error"`, `"Exception"`), which never matched the project's canonical `LogLevel` values (`ERROR`, `FATAL`, upper-case) — matching is now case-insensitive and includes `fatal`.
+  - [x] Scrub diagnostic input/output for PII. `diagnose_log_failure()` now runs `scrub_text()` on the incoming `log_payload` before it's put in the prompt, and again on the agent's final response before returning it — mirroring the two-scrub-point pattern already used by the SQL agent (see `CLAUDE.md`).
+  - [x] Make model/provider configurable and lazy-loaded. `get_diagnostic_agent()` now calls `get_agent_model("diagnostic_agent")` (reads `config/agents.yaml`) instead of the hard-coded `init_chat_model("openai:gpt-5.5")`; model creation was already lazy (only inside the factory function, never at import time) and remains so.
 
 - [ ] **2.4 Router / planner agent**
   - [ ] Create `src/agents/router_agent.py`.
@@ -208,5 +208,5 @@ Last audit: 2026-08-24
 Current pytest result:
 
 ```text
-98 passed
+118 passed
 ```
