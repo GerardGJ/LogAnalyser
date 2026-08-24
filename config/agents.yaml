@@ -3,8 +3,8 @@ sql_agent:
   temperature: 0.0
 
 diagnostic_agent:
-  model: "claude-3-5-sonnet-20241022"
-  temperature: 0.2
+  model: "gpt-5.5"
+  temperature: 0.0
 
 security_agent:
   model: "gpt-4o-mini"
