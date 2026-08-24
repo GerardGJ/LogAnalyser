@@ -27,9 +27,10 @@ Copy `.env.example` to `.env` before running anything that touches an LLM (`OPEN
 Currently implemented:
 - **SQL agent** (`src/agents/sql_agent.py`) — text-to-SQL over DuckDB via `langchain.agents.create_agent`, with an explicit N-retry wrapper (`query_log_agent_with_retry`) that re-prompts the model with the prior exception on failure.
 - **Diagnostic agent** (`src/agents/diagnostic_agent.py`) — root-cause analysis over stack traces/log snippets, with tools for stack-trace extraction and context-window-safe log sampling (`src/tools/diagnostics_tools.py`). Model is config-driven (`get_agent_model("diagnostic_agent")`, same pattern as the SQL agent), and `diagnose_log_failure()` scrubs PII on both the incoming log payload and the outgoing analysis.
+- **Router agent** (`src/agents/router_agent.py`) — `route_query(question) -> Literal["sql", "diagnostic", "unsupported"]`. Deliberately not an LLM agent: deterministic word-boundary keyword regexes, per the POC decision to defer an LLM router. Not yet called from anywhere (no graph exists yet — see Phase 3 in `TODO.md`).
 - **DuckDB engine** (`src/engines/`) and **PII scrubber** (`src/security/pii_scrubber.py`).
 
-Not implemented (exists only as empty file, missing entirely, or stubbed in README): `security_agent.py` (empty), `router_agent.py`, `synthesizer_agent.py`, `src/graph/state.py` / `workflow.py` (LangGraph orchestration is not wired up — agents are called directly), RBAC, Presidio/NER-based PII, non-DuckDB engine adapters.
+Not implemented (exists only as empty file, missing entirely, or stubbed in README): `security_agent.py` (empty), `synthesizer_agent.py`, `src/graph/state.py` / `workflow.py` (LangGraph orchestration is not wired up — agents are called directly), RBAC, Presidio/NER-based PII, non-DuckDB engine adapters.
 
 ## Architecture notes that span multiple files
 

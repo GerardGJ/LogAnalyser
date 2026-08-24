@@ -20,7 +20,7 @@ Last audit: 2026-08-24
 | SQL agent | Complete | LangChain agent factory, database tools, DDL/DML guardrail, and deterministic tests all in place (`tests/test_sql_agent.py`, `tests/test_database_tools.py`); model config is lazy and `config/agents.yaml`-driven. |
 | Diagnostic agent | Partial | Agent factory, stack trace tools, PII scrubbing, config-driven model, and deterministic tests are all in place (`tests/test_diagnostics_tools.py`, `tests/test_diagnostic_agent.py`); no graph integration exists yet (Phase 3). |
 | Security agent | Deferred | `src/agents/security_agent.py` intentionally left empty until Router/Synthesizer are working — see workflow decision above. Regex PII scrubbing at the engine/prompt boundary is unaffected and stays active. |
-| Router/planner agent | Not started | `src/agents/router_agent.py` is missing. |
+| Router/planner agent | Complete | `src/agents/router_agent.py` deterministically classifies into `sql`/`diagnostic`/`unsupported` via keyword regexes; not yet wired into a graph (Phase 3). |
 | Synthesizer agent | Not started | `src/agents/synthesizer_agent.py` is missing. |
 | LangGraph workflow | Not started | `src/graph/` only contains `__init__.py`; no state or workflow definitions. |
 | CLI | Prototype only | `main.py` sends one hard-coded Spanish query to the SQL retry function; no interactive loop or data/bootstrap flow. |
@@ -110,11 +110,11 @@ Last audit: 2026-08-24
   - [x] Scrub diagnostic input/output for PII. `diagnose_log_failure()` now runs `scrub_text()` on the incoming `log_payload` before it's put in the prompt, and again on the agent's final response before returning it — mirroring the two-scrub-point pattern already used by the SQL agent (see `CLAUDE.md`).
   - [x] Make model/provider configurable and lazy-loaded. `get_diagnostic_agent()` now calls `get_agent_model("diagnostic_agent")` (reads `config/agents.yaml`) instead of the hard-coded `init_chat_model("openai:gpt-5.5")`; model creation was already lazy (only inside the factory function, never at import time) and remains so.
 
-- [ ] **2.4 Router / planner agent**
-  - [ ] Create `src/agents/router_agent.py`.
-  - [ ] Classify queries into at least `sql`, `diagnostic`, and `unsupported/clarify` routes.
-  - [ ] Prefer deterministic keyword/structured rules for the POC, with optional LLM fallback later.
-  - [ ] Add tests for metrics queries, root-cause queries, trace lookups, and ambiguous inputs.
+- [x] **2.4 Router / planner agent**
+  - [x] Create `src/agents/router_agent.py`.
+  - [x] Classify queries into at least `sql`, `diagnostic`, and `unsupported/clarify` routes. `route_query()` returns a `Literal["sql", "diagnostic", "unsupported"]`.
+  - [x] Prefer deterministic keyword/structured rules for the POC, with optional LLM fallback later. Implemented as two word-boundary regexes (no model, no `config/agents.yaml` entry needed) — diagnostic phrases (`why`, `root cause`, `crash`, `fail(ed|ure)`, `broke(n)`, `exception`, `traceback`, `diagnose`, `debug`) are checked before SQL phrases (`how many`, `count`, `top N`, `group by`, `source_file`, etc.), so a mixed-intent question routes to the more specific diagnostic ask. LLM fallback is intentionally left for later.
+  - [x] Add tests for metrics queries, root-cause queries, trace lookups, and ambiguous inputs. `tests/test_router_agent.py` (24 tests) also covers case-insensitivity, word-boundary false positives (`"failover"` must not match `"fail"`), and the mixed-intent tie-break.
 
 - [ ] **2.5 Synthesizer agent**
   - [ ] Create `src/agents/synthesizer_agent.py`.
@@ -208,5 +208,5 @@ Last audit: 2026-08-24
 Current pytest result:
 
 ```text
-118 passed
+142 passed
 ```
