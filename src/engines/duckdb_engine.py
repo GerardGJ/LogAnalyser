@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Any, Union
 import duckdb
@@ -5,6 +6,26 @@ import polars as pl
 
 from src.engines.relational_engine import RelationalEngine
 from src.security.pii_scrubber import scrub_dataframe
+
+# Maps a supported file extension to the DuckDB table function used to read it.
+# Ingestion is restricted to this allowlist so arbitrary files can't be read
+# through an unexpected DuckDB reader.
+_FILE_READERS = {
+    ".csv": "read_csv_auto",
+    ".json": "read_json_auto",
+    ".jsonl": "read_json_auto",
+    ".parquet": "read_parquet",
+}
+
+# Denylist of tokens that would let a `delete_filter()` caller escape the
+# intended WHERE-clause context (statement chaining, comments, DDL/DML).
+_UNSAFE_FILTER_PATTERN = re.compile(
+    r";"
+    r"|--"
+    r"|/\*"
+    r"|\b(ATTACH|DETACH|PRAGMA|INSTALL|LOAD|COPY|INSERT|UPDATE|DROP|CREATE|ALTER|EXEC|EXECUTE|CALL)\b",
+    re.IGNORECASE,
+)
 
 
 class DuckDBEngine(RelationalEngine):
@@ -76,24 +97,50 @@ class DuckDBEngine(RelationalEngine):
             logs_df = data  # noqa: F841
             self._conn.execute("CREATE TABLE IF NOT EXISTS logs AS SELECT * FROM logs_df")
         elif isinstance(data, (str, Path)):
-            # Direct SQL query over file paths (CSV/Parquet/JSON)
-            self._conn.execute(
-                f"CREATE TABLE IF NOT EXISTS logs AS SELECT * FROM read_csv_auto('{data}')"
-            )
+            self._insert_file(Path(data))
         else:
             raise ValueError(f"Unsupported data type for insertion: {type(data)}")
 
+    def _insert_file(self, path: Path) -> None:
+        """
+        Loads a CSV, JSON/JSONL, or Parquet file into the `logs` table using
+        DuckDB's native readers, chosen from an extension allowlist rather
+        than trusting the caller-provided format.
+        """
+        if not path.is_file():
+            raise FileNotFoundError(f"Log file not found: {path}")
+
+        reader = _FILE_READERS.get(path.suffix.lower())
+        if reader is None:
+            supported = ", ".join(sorted(_FILE_READERS))
+            raise ValueError(
+                f"Unsupported file extension '{path.suffix}' for ingestion. "
+                f"Supported formats: {supported}"
+            )
+
+        # DuckDB table functions don't accept bound parameters for filenames,
+        # so the resolved path is quote-escaped before interpolation.
+        resolved = str(path.resolve()).replace("'", "''")
+        self._conn.execute(
+            f"CREATE TABLE IF NOT EXISTS logs AS SELECT * FROM {reader}('{resolved}')"
+        )
+
     def _get_by_id(self, record_id: str) -> pl.DataFrame:
-        """Fetches a log record by its identifier (e.g., trace_id or rowid)."""
-        query = "SELECT * FROM logs WHERE trace_id = ?"
+        """Fetches a log record by DuckDB's internal rowid."""
+        query = "SELECT * FROM logs WHERE CAST(rowid AS VARCHAR) = ?"
         return self._execute_query(query, params=(record_id,))
 
     def _delete_record(self, record_id: str) -> None:
-        """Deletes a record matching a specific trace_id."""
-        query = "DELETE FROM logs WHERE trace_id = ?"
+        """Deletes a log record by DuckDB's internal rowid."""
+        query = "DELETE FROM logs WHERE CAST(rowid AS VARCHAR) = ?"
         self._execute_query(query, params=(record_id,))
 
     def _delete_filter(self, filter: str) -> None:
-        """Deletes records matching a raw SQL WHERE condition."""
+        """Deletes records matching a restricted, single-condition SQL WHERE clause."""
+        if not filter or not filter.strip():
+            raise ValueError("delete_filter() requires a non-empty WHERE condition.")
+        if _UNSAFE_FILTER_PATTERN.search(filter):
+            raise ValueError(f"Unsafe SQL filter rejected: {filter!r}")
+
         query = f"DELETE FROM logs WHERE {filter}"
         self._execute_query(query)

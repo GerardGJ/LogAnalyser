@@ -13,8 +13,9 @@ An intelligent, multi-agent conversational AI system designed to query, diagnose
 6. [PII Masking & Security Framework](#pii-masking--security-framework)
 7. [Project Structure](#project-structure)
 8. [Getting Started](#getting-started)
-9. [Configuration & Environment Variables](#configuration--environment-variables)
-10. [Roadmap](#roadmap)
+9. [Developer Commands](#developer-commands)
+10. [Configuration & Environment Variables](#configuration--environment-variables)
+11. [Roadmap](#roadmap)
 
 ---
 
@@ -25,7 +26,7 @@ Modern microservice architectures generate massive volumes of log data across di
 The **Production Log Analyzer** solves this challenge by providing:
 * **Natural Language Telemetry Interface:** Converts plain English user queries into optimized, execution-engine queries (e.g., Text-to-SQL).
 * **Multi-Agent Collaborative Intelligence:** Decouples complex analytical workflows—such as security checks, SQL query generation, error stack-trace diagnosis, and synthesis—into specialized, deterministic AI agents.
-* **Engine-Agnostic Query Layer:** Operates seamlessly over local log formats (JSON, CSV, Parquet) for Proof-of-Concept (POC) environments, with pluggable support for enterprise log databases (ClickHouse, PostgreSQL, Databricks, Snowflake, OpenSearch).
+* **Engine-Agnostic Query Layer:** Currently parses the standard application text-log format (see [Standard Log Schema](#standard-log-schema)) for Proof-of-Concept (POC) environments; JSON/CSV/Parquet ingestion and pluggable support for enterprise log databases (ClickHouse, PostgreSQL, Databricks, Snowflake, OpenSearch) are planned but not yet implemented (see `TODO.md`).
 * **Privacy & Security Guardrails:** Enforces Role-Based Access Control (RBAC) and automated PII masking at both ingestion and query execution, ensuring sensitive payload data never leaves the security perimeter.
 
 ---
@@ -82,7 +83,7 @@ The architecture follows a graph-based multi-agent orchestration design pattern.
 ### Execution Flow Sequence
 
 1. **Authentication & Sanitization (Agent 1):** The user's query and security scope (JWT/Role) enter the Security Agent. PII is scrubbed, and user permissions are validated.
-2. **Intent Planning & Routing (Agent 2):** The Router analyzes the query intent. It routes analytical/metric queries (e.g., *"What is the error rate by service today?"*) to the Text-to-SQL Agent, and deep diagnostic questions (e.g., *"Why is authentication failing?"*) to the Log Diagnostic Agent.
+2. **Intent Planning & Routing (Agent 2):** The Router analyzes the query intent. It routes analytical/metric queries (e.g., *"What is the error rate by app today?"*) to the Text-to-SQL Agent, and deep diagnostic questions (e.g., *"Why is authentication failing?"*) to the Log Diagnostic Agent.
 3. **Execution & Telemetry Fetching (Agents 3 & 4):**
    * **Text-to-SQL Agent** inspects the target database schema, drafts a SQL query, executes it against the database abstraction layer, and validates the output tabular dataset.
    * **Log Diagnostic Agent** queries representative sample logs (e.g., top 15-20 failed trace stack traces) to analyze underlying error patterns without exceeding context window constraints.
@@ -106,21 +107,22 @@ The system divides operational responsibilities across five dedicated agents:
 
 ## Standard Log Schema
 
-For maximum inter-compatibility across engines, the POC standardizes log ingestion around a 5-field schema baseline:
+The POC standardizes parsed text log ingestion around the schema emitted by `src/utils/log_loader.py`:
 
 | Column Name | Data Type | Description |
 | :--- | :--- | :--- |
 | `timestamp` | `TIMESTAMP` | ISO-8601 UTC timestamp of log event generation. |
-| `level` | `VARCHAR` | Log severity classification (`INFO`, `WARN`, `ERROR`, `FATAL`, `DEBUG`). |
-| `trace_id` | `VARCHAR` | Unique request correlation identifier across distributed microservices. |
-| `service` | `VARCHAR` | Name of the microservice or component emitting the log event. |
+| `level` | `VARCHAR` | Log severity classification (`INFO`, `WARNING`, `ERROR`, `FATAL`, `DEBUG`). |
+| `app` | `VARCHAR` | Application or component name parsed from the log header. |
+| `source_file` | `VARCHAR` | Source file parsed from the log header. |
+| `line_number` | `INTEGER` | Source line number parsed from the log header. |
 | `message` | `TEXT` | Log event payload, containing text descriptions, error messages, or stack traces. |
 
 ---
 
 ## Database Engine & Abstraction Layer
 
-To maintain engine independence, the system utilizes an abstract database interface (`BaseEngine`). Local development and POC environments default to **DuckDB** or **SQLite** operating directly over raw log files (JSON, CSV, Parquet).
+To maintain engine independence, the system utilizes an abstract database interface (`BaseEngine`). Local development and POC environments default to **DuckDB** operating over log data parsed from the standard text-log format described above. File-based ingestion of raw JSON/CSV/Parquet sources is planned but not yet implemented (see `TODO.md` 1.3/5.1).
 
 ```
                       ┌───────────────────────────────┐
@@ -159,9 +161,9 @@ To prevent sensitive operational data from leaking to external LLM providers, th
 production-log-analyzer/
 │
 ├── README.md                     # Project documentation & setup instructions
-├── requirements.txt              # Python dependency specifications
 ├── .env.example                  # Environment variable configuration template
-├── pyproject.toml                # Build system and linting setup
+├── pyproject.toml                # Project metadata, dependencies, and tool config
+├── uv.lock                       # Locked dependency versions for reproducible installs
 │
 ├── config/                       # Application configurations
 │   ├── settings.py               # Dynamic settings & environment loader
@@ -194,7 +196,8 @@ production-log-analyzer/
 │   │
 │   ├── engines/                  # Database abstraction layer
 │   │   ├── __init__.py
-│   │   ├── base.py               # Abstract BaseEngine interface class
+│   │   ├── base_engine.py        # Abstract BaseEngine interface class
+│   │   ├── relational_engine.py  # Abstract RelationalEngine (SQL-oriented) interface class
 │   │   ├── duckdb_engine.py      # DuckDB implementation for local files
 │   │   └── postgres_engine.py    # PostgreSQL/TimescaleDB engine implementation
 │   │
@@ -223,8 +226,8 @@ production-log-analyzer/
 
 ### Prerequisites
 
-* **Python:** `>= 3.10`
-* **Virtual Environment:** `venv` or `conda`
+* **Python:** `>= 3.13`
+* **Package Manager:** `uv`
 
 ### Installation
 
@@ -234,32 +237,52 @@ production-log-analyzer/
    cd production-log-analyzer
    ```
 
-2. **Set Up Virtual Environment:**
+2. **Install Dependencies:**
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
+   uv sync
    ```
 
-3. **Install Dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Environment Setup:**
-   Copy the example configuration file and set your API credentials:
+3. **Environment Setup:**
+   Copy the example configuration file and set your local API credentials:
    ```bash
    cp .env.example .env
    ```
 
-5. **Load Sample Logs into Local Engine (POC):**
+4. **Run Tests:**
    ```bash
-   python -m src.utils.log_loader --input data/raw_logs/sample_production.json
+   uv run pytest
    ```
+
+5. **Sanity-check the Log Parser (POC):**
+   ```bash
+   uv run python -m src.utils.log_loader
+   ```
+   Parses the file at `config.settings.LOGS_PATH` (defaults to `data/raw_logs/pipeline.log`) and prints the resulting schema.
 
 6. **Run the Interactive CLI Chatbot:**
    ```bash
-   python main.py
+   uv run python main.py
    ```
+
+---
+
+## Developer Commands
+
+The project currently uses `uv` with `pyproject.toml` and `uv.lock` as the canonical local development workflow.
+
+```bash
+# Install or sync dependencies
+uv sync
+
+# Run the test suite
+uv run pytest
+
+# Equivalent pytest invocation
+uv run python -m pytest
+
+# Run the current CLI prototype
+uv run python main.py
+```
 
 ---
 
@@ -274,7 +297,8 @@ LLM_MODEL=gpt-4o
 
 # Database Execution Settings
 DB_ENGINE=duckdb
-DUCKDB_PATH=data/duckdb/logs.duckdb
+DUCKDB_PATH=data/duckdb/logdatabase.db
+LOGS_PATH=data/raw_logs/pipeline.log
 
 # Security & PII Settings
 ENABLE_PII_SCRUBBING=true

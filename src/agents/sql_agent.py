@@ -10,6 +10,7 @@ from src.tools.database_tools import (
     sql_db_schema,
 )
 from src.security.pii_scrubber import scrub_text
+from src.utils.config_loader import get_agent_model
 
 load_dotenv()
 
@@ -39,7 +40,7 @@ Rules:
 
 def get_sql_agent():
     """Factory function to build and return the configured SQL agent."""
-    model = init_chat_model("openai:gpt-5.5")
+    model = get_agent_model("sql_agent")
     return create_agent(
         model=model,
         tools=[sql_db_list_tables, sql_db_schema, sql_db_query, sql_db_query_checker],
@@ -87,8 +88,3 @@ def query_log_agent_with_retry(
                 "Please inspect the database schema again, re-check your SQL query, "
                 "and fix the error before executing."
             )
-
-
-if __name__ == "__main__":
-    sample_question = "How did the last execution finish?"
-    run_sql_agent(sample_question)

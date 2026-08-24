@@ -55,8 +55,6 @@ def parse_log_text(log_content: str) -> pl.DataFrame:
 def load_logs(source: Union[str, Path]) -> pl.DataFrame:
     """Loads and parses log data from a file path or direct string content."""
     path = Path(source) if isinstance(source, str) and not source.count("\n") else None
-
-    print(path)
     
     if path and path.is_file():
         content = path.read_text(encoding="utf-8")

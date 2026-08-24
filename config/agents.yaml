@@ -1,0 +1,15 @@
+sql_agent:
+  model: "gpt-4o"
+  temperature: 0.0
+
+diagnostic_agent:
+  model: "claude-3-5-sonnet-20241022"
+  temperature: 0.2
+
+security_agent:
+  model: "gpt-4o-mini"
+  temperature: 0.0
+
+query_checker:
+  model: "gpt-4o-mini"
+  temperature: 0.0

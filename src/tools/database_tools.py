@@ -4,12 +4,12 @@ from langchain.tools import tool
 
 from config.settings import DUCKDB_PATH
 from src.engines.duckdb_engine import DuckDBEngine
+from src.utils.config_loader import get_agent_model
 
 load_dotenv()
 
 # Initialize model instance for internal tool invocation
 engine = DuckDBEngine(DUCKDB_PATH)
-model = init_chat_model("gpt-5.5")
 
 @tool
 def sql_db_list_tables() -> str:
@@ -93,7 +93,8 @@ Output the final executable SQL query only, without explanation or markdown form
 
 SQL Query:
 {query}"""
-
+    
+    model = get_agent_model("query_checker")
     response = model.invoke(trigger_prompt)
     content = response.content if hasattr(response, "content") else str(response)
     

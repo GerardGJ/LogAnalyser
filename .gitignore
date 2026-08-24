@@ -220,7 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Workflow
-TODO.md
+# TODO.md
 
 # Duckdb
 data/duckdb/logdatabase.db

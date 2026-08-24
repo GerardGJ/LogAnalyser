@@ -1,7 +1,7 @@
 from src.agents.sql_agent import query_log_agent_with_retry
 
 def main():
-    user_query = "How did the last execution finish?"
+    user_query = "Cuando fue el primer post?"
     
     # Executes agent with fallback / automatic N-retry loop
     response = query_log_agent_with_retry(user_query, max_retries=3)
