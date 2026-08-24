@@ -1,7 +1,7 @@
 import re
 from typing import Literal
 
-Route = Literal["sql", "diagnostic", "unsupported"]
+Route = Literal["sql", "diagnostic"]
 
 # Deterministic keyword/phrase rules, per the POC decision in TODO.md 2.4 to
 # prefer this over an LLM router for now. Phrases are wrapped in \b...\b so
@@ -21,22 +21,26 @@ _SQL_REGEX = re.compile("|".join(rf"\b{p}\b" for p in _SQL_PHRASES), re.IGNORECA
 _DIAGNOSTIC_REGEX = re.compile("|".join(rf"\b{p}\b" for p in _DIAGNOSTIC_PHRASES), re.IGNORECASE)
 
 
-def route_query(question: str) -> Route:
+def route_query(question: str) -> list[Route]:
     """
-    Classifies a natural-language question into a downstream agent route.
+    Classifies a natural-language question into zero or more downstream
+    agent routes.
 
-    Deterministic and keyword-based: matches diagnostic phrases (root-cause
-    intent, e.g. "why", "crash", "traceback") ahead of SQL phrases (metrics/
-    lookup intent, e.g. "how many", "top 5", "group by") so a mixed-intent
-    question like "why are there so many errors, show me the top apps"
-    routes to the more specific diagnostic ask rather than the SQL one.
-    Falls back to "unsupported" when neither matches or the input is empty.
+    Deterministic and keyword-based: diagnostic phrases (root-cause intent,
+    e.g. "why", "crash", "traceback") and SQL phrases (metrics/lookup
+    intent, e.g. "how many", "top 5", "group by") are checked independently,
+    so a mixed-intent question like "why are there so many errors, show me
+    the top apps" returns both routes and can fan out to both agents.
+    Routes are always returned diagnostic-before-sql for a stable order
+    downstream consumers (e.g. the Synthesizer) can rely on. An empty list
+    means "unsupported" — neither matched, or the input was empty.
     """
     if not question or not question.strip():
-        return "unsupported"
+        return []
 
+    routes: list[Route] = []
     if _DIAGNOSTIC_REGEX.search(question):
-        return "diagnostic"
+        routes.append("diagnostic")
     if _SQL_REGEX.search(question):
-        return "sql"
-    return "unsupported"
+        routes.append("sql")
+    return routes

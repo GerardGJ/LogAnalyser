@@ -20,8 +20,8 @@ Last audit: 2026-08-24
 | SQL agent | Complete | LangChain agent factory, database tools, DDL/DML guardrail, and deterministic tests all in place (`tests/test_sql_agent.py`, `tests/test_database_tools.py`); model config is lazy and `config/agents.yaml`-driven. |
 | Diagnostic agent | Partial | Agent factory, stack trace tools, PII scrubbing, config-driven model, and deterministic tests are all in place (`tests/test_diagnostics_tools.py`, `tests/test_diagnostic_agent.py`); no graph integration exists yet (Phase 3). |
 | Security agent | Deferred | `src/agents/security_agent.py` intentionally left empty until Router/Synthesizer are working — see workflow decision above. Regex PII scrubbing at the engine/prompt boundary is unaffected and stays active. |
-| Router/planner agent | Complete | `src/agents/router_agent.py` deterministically classifies into `sql`/`diagnostic`/`unsupported` via keyword regexes; not yet wired into a graph (Phase 3). |
-| Synthesizer agent | Not started | `src/agents/synthesizer_agent.py` is missing. |
+| Router/planner agent | Complete | `src/agents/router_agent.py` deterministically classifies into a `list["sql" \| "diagnostic"]` route set (empty = unsupported) via keyword regexes, so mixed-intent questions can fan out to both agents; not yet wired into a graph (Phase 3). |
+| Synthesizer agent | Complete | `src/agents/synthesizer_agent.py` deterministically merges whatever routes ran (SQL results, diagnostic summary, warnings) into Markdown with a final PII scrub pass; not yet wired into a graph (Phase 3). |
 | LangGraph workflow | Not started | `src/graph/` only contains `__init__.py`; no state or workflow definitions. |
 | CLI | Prototype only | `main.py` sends one hard-coded Spanish query to the SQL retry function; no interactive loop or data/bootstrap flow. |
 | Tests | Partial | `uv run pytest` passes for the current single engine test; `tests/test_pii.py` and `tests/test_graph.py` are still empty. |
@@ -112,15 +112,16 @@ Last audit: 2026-08-24
 
 - [x] **2.4 Router / planner agent**
   - [x] Create `src/agents/router_agent.py`.
-  - [x] Classify queries into at least `sql`, `diagnostic`, and `unsupported/clarify` routes. `route_query()` returns a `Literal["sql", "diagnostic", "unsupported"]`.
-  - [x] Prefer deterministic keyword/structured rules for the POC, with optional LLM fallback later. Implemented as two word-boundary regexes (no model, no `config/agents.yaml` entry needed) — diagnostic phrases (`why`, `root cause`, `crash`, `fail(ed|ure)`, `broke(n)`, `exception`, `traceback`, `diagnose`, `debug`) are checked before SQL phrases (`how many`, `count`, `top N`, `group by`, `source_file`, etc.), so a mixed-intent question routes to the more specific diagnostic ask. LLM fallback is intentionally left for later.
-  - [x] Add tests for metrics queries, root-cause queries, trace lookups, and ambiguous inputs. `tests/test_router_agent.py` (24 tests) also covers case-insensitivity, word-boundary false positives (`"failover"` must not match `"fail"`), and the mixed-intent tie-break.
+  - [x] Classify queries into at least `sql`, `diagnostic`, and `unsupported/clarify` routes. `route_query()` returns `list[Literal["sql", "diagnostic"]]`, with an empty list meaning unsupported — this was widened from a single route to a route *set* so a mixed-intent question can fan out to both agents (see design discussion below and 2.5's Synthesizer, which merges whatever routes actually ran).
+  - [x] Prefer deterministic keyword/structured rules for the POC, with optional LLM fallback later. Implemented as two word-boundary regexes (no model, no `config/agents.yaml` entry needed) — diagnostic phrases (`why`, `root cause`, `crash`, `fail(ed|ure)`, `broke(n)`, `exception`, `traceback`, `diagnose`, `debug`) and SQL phrases (`how many`, `count`, `top N`, `group by`, `source_file`, etc.) are checked independently and returned diagnostic-before-sql for a stable order. LLM fallback is intentionally left for later.
+  - [x] Add tests for metrics queries, root-cause queries, trace lookups, and ambiguous inputs. `tests/test_router_agent.py` (26 tests) also covers case-insensitivity, word-boundary false positives (`"failover"` must not match `"fail"`), and mixed-intent questions returning both routes.
 
-- [ ] **2.5 Synthesizer agent**
-  - [ ] Create `src/agents/synthesizer_agent.py`.
-  - [ ] Merge SQL results, diagnostic summaries, execution metadata, and warnings into concise Markdown.
-  - [ ] Add final PII scrub pass.
-  - [ ] Add tests for empty results, tabular results, diagnostic-only results, mixed results, and errors.
+- [x] **2.5 Synthesizer agent**
+  - [x] Create `src/agents/synthesizer_agent.py`.
+  - [x] Merge SQL results, diagnostic summaries, execution metadata, and warnings into concise Markdown. `synthesize_response(question, sql_result=None, diagnostic_result=None, errors=None)` is deterministic template assembly (not an LLM call, matching the router's design), rendering `## Root Cause Analysis` and `## Query Results` sections only for routes that actually produced a result (diagnostic-before-sql order, matching `route_query()`), a `## Warnings` section when `errors` is non-empty, and a "No results available" fallback when neither result was provided (the unsupported-route case).
+  - [x] Add final PII scrub pass. `scrub_text()` runs over the fully assembled Markdown (heading, results, warnings) before it's returned — the last of the scrub points documented in `CLAUDE.md`.
+  - [x] Add tests for empty results, tabular results, diagnostic-only results, mixed results, and errors. `tests/test_synthesizer_agent.py` (14 tests) covers all of these plus PII scrubbing across the question/sql/diagnostic inputs and the empty/whitespace-only question fallback heading.
+  - Note: this stays standalone until Phase 3 wires it into the graph as the join point for the router's fan-out (see 3.2/3.3 below).
 
 ---
 
@@ -129,21 +130,21 @@ Last audit: 2026-08-24
 
 - [ ] **3.1 Shared state definition**
   - [ ] Create `src/graph/state.py`.
-  - [ ] Define `AgentState` fields for raw query, route, SQL query, SQL results, diagnostic input, diagnostic output, errors, metadata, and final response. (Omit user role/scope fields until 2.1a lands.)
+  - [ ] Define `AgentState` fields for raw query, **`routes: list[str]`** (plural — `route_query()` now returns a route set, not a single route, so both SQL and diagnostic branches can run for a mixed-intent question), SQL query, SQL results, diagnostic input, diagnostic output, errors, metadata, and final response. (Omit user role/scope fields until 2.1a lands.)
   - [ ] Include a consistent error shape for failed routing, SQL, and diagnostic steps.
 
 - [ ] **3.2 Graph node wrappers**
   - [ ] Implement router node.
   - [ ] Implement SQL node.
   - [ ] Implement diagnostic node.
-  - [ ] Implement synthesizer node.
+  - [ ] Implement synthesizer node — this is the fan-in/join point: it must wait for whichever of SQL/diagnostic actually ran (per `routes`) before calling `synthesize_response()`, not assume exactly one ran.
   - [ ] (Deferred) Implement security node once `SecurityAgent` (2.1a) exists.
 
 - [ ] **3.3 Graph assembly and conditional edges**
   - [ ] Create `src/graph/workflow.py`.
-  - [ ] Wire `RouterNode -> (SQLNode | DiagnosticNode) -> SynthesizerNode`.
-  - [ ] Add fallback paths for unsupported intent, query execution errors, and empty results.
-  - [ ] Add graph-level tests using mocked agents and a sample DuckDB fixture.
+  - [ ] Wire `RouterNode -> (SQLNode and/or DiagnosticNode, fanned out per `routes`) -> SynthesizerNode`. This needs LangGraph's conditional-edge-returns-a-list support (fan-out) plus a join before the synthesizer, not a simple either/or branch.
+  - [ ] Add fallback paths for unsupported intent (empty `routes`), query execution errors, and empty results.
+  - [ ] Add graph-level tests using mocked agents and a sample DuckDB fixture, including a mixed-intent case that exercises both branches feeding one synthesizer call.
   - [ ] (Deferred) Prepend `SecurityNode` once 2.1a lands; add rejected-permission fallback path then.
 
 ---
@@ -208,5 +209,5 @@ Last audit: 2026-08-24
 Current pytest result:
 
 ```text
-142 passed
+158 passed
 ```
