@@ -17,7 +17,7 @@ Last audit: 2026-08-24
 | Log schema | Complete | `LogEntry`, `log_loader.py`, engine tests, and README all use the canonical parsed-file schema (`timestamp`, `level`, `app`, `source_file`, `line_number`, `message`); no `trace_id`/`service` fields remain. |
 | DuckDB engine | Partial | `BaseEngine`, `RelationalEngine`, and `DuckDBEngine` exist, but file ingestion is CSV-only, raw SQL string interpolation remains in places, and tests are not currently runnable. |
 | PII scrubbing | Partial | Regex scrubber exists for emails, IPv4, API keys, and JWTs, now with unit coverage (`tests/test_pii.py`); no Presidio/NER integration or RBAC yet. |
-| SQL agent | Partial | LangChain agent factory exists, but it depends on live model initialization, uses hard-coded model names, and has a broken `__main__` call. |
+| SQL agent | Complete | LangChain agent factory, database tools, DDL/DML guardrail, and deterministic tests all in place (`tests/test_sql_agent.py`, `tests/test_database_tools.py`); model config is lazy and `config/agents.yaml`-driven. |
 | Diagnostic agent | Partial | Agent factory and stack trace tools exist, but no deterministic tests or graph integration exist. |
 | Security agent | Deferred | `src/agents/security_agent.py` intentionally left empty until Router/Synthesizer are working — see workflow decision above. Regex PII scrubbing at the engine/prompt boundary is unaffected and stays active. |
 | Router/planner agent | Not started | `src/agents/router_agent.py` is missing. |
@@ -93,14 +93,14 @@ Last audit: 2026-08-24
   - [ ] Add RBAC/scope model and deny/allow behavior for restricted log fields or services.
   - Reason to defer: no multi-user/role concept exists yet in this solo POC; building RBAC now would be speculative. Revisit once the Router → SQL/Diagnostic → Synthesizer graph works, or when a real driver (multi-user access, real secrets in logs) appears.
 
-- [~] **2.2 Text-to-SQL generation and self-correction agent**
+- [x] **2.2 Text-to-SQL generation and self-correction agent**
   - [x] Build SQL agent factory with schema inspection, query checking, execution tools, and retry wrapper.
   - [x] Implement database tools for listing tables, fetching schema, running queries, and checking SQL.
-  - [ ] Defer model creation until runtime so imports/tests do not require API credentials.
-  - [ ] Use configured model/provider values from settings or environment.
-  - [ ] Add guardrails that reject DDL/DML before query execution, not only through prompt instructions.
-  - [ ] Add deterministic tests using fake/mocked LLM responses.
-  - [ ] Add integration test against a populated DuckDB fixture once pytest collection is fixed.
+  - [x] Defer model creation until runtime so imports/tests do not require API credentials. `get_agent_model()` is only invoked inside `get_sql_agent()`/`sql_db_query_checker()`, never at module import time.
+  - [x] Use configured model/provider values from settings or environment. Both the SQL agent and the query checker read model/provider/temperature from `config/agents.yaml` via `get_agent_model`; no hard-coded model names remain in `sql_agent.py`/`database_tools.py`.
+  - [x] Add guardrails that reject DDL/DML before query execution, not only through prompt instructions. `src/tools/database_tools.py` now has `_reject_unsafe_query()`, called from `sql_db_query` before anything reaches `DuckDBEngine`: rejects any query whose leading keyword isn't `SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`, and separately rejects statement-chaining (`;`), comments, and DDL/DML/admin keywords (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `ATTACH`, `PRAGMA`, etc.) anywhere in the string, including inside a CTE. The guardrail is intentionally scoped to this tool rather than `DuckDBEngine._execute_query` generally, since that method is also used internally for legitimate `DELETE`s (`_delete_record`).
+  - [x] Add deterministic tests using fake/mocked LLM responses. `tests/test_sql_agent.py` exercises `query_log_agent_with_retry()` against a scripted fake agent (first-try success, prompt scrubbing, retry-then-succeed, retries-exhausted, agent built once and reused); `tests/test_database_tools.py` covers `_reject_unsafe_query()` and mocks `get_agent_model` for `sql_db_query_checker`.
+  - [x] Add integration test against a populated DuckDB fixture once pytest collection is fixed. `tests/test_database_tools.py`'s `populated_tools_engine` fixture points the tools' module-level `engine` at a temp-file-backed DuckDB (not `:memory:`, since the tools reconnect per call — see `CLAUDE.md`) and verifies `sql_db_query`/`sql_db_list_tables`/`sql_db_schema` end-to-end, including that a blocked `DROP TABLE`/stacked statement leaves the table intact and that query results are PII-scrubbed.
 
 - [~] **2.3 Log diagnostic and stack-trace sampling agent**
   - [x] Implement `parse_stack_trace` tool.
@@ -208,5 +208,5 @@ Last audit: 2026-08-24
 Current pytest result:
 
 ```text
-65 passed
+98 passed
 ```

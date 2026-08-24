@@ -1,3 +1,5 @@
+import re
+
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
@@ -10,6 +12,35 @@ load_dotenv()
 
 # Initialize model instance for internal tool invocation
 engine = DuckDBEngine(DUCKDB_PATH)
+
+# The SQL agent should only ever read data. Reject any query that isn't a
+# read-only statement, and any query smuggling a second statement or a
+# DDL/DML keyword past the leading keyword check, rather than relying on
+# the system prompt alone to keep the LLM from writing/altering data.
+_READ_ONLY_LEADING_KEYWORDS = ("SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN")
+_UNSAFE_QUERY_PATTERN = re.compile(
+    r";"
+    r"|--"
+    r"|/\*"
+    r"|\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|ATTACH|DETACH|INSTALL|LOAD|COPY|EXEC|EXECUTE|CALL|GRANT|REVOKE|TRUNCATE|VACUUM|EXPORT|IMPORT|PRAGMA)\b",
+    re.IGNORECASE,
+)
+
+
+def _reject_unsafe_query(query: str) -> None:
+    """Raises ValueError if `query` is not a single, read-only statement."""
+    stripped = query.strip()
+    if not stripped:
+        raise ValueError("Query is empty.")
+
+    leading_keyword = re.match(r"[A-Za-z]+", stripped)
+    if not leading_keyword or leading_keyword.group(0).upper() not in _READ_ONLY_LEADING_KEYWORDS:
+        raise ValueError(
+            f"Only read-only queries ({', '.join(_READ_ONLY_LEADING_KEYWORDS)}) are permitted: {query!r}"
+        )
+
+    if _UNSAFE_QUERY_PATTERN.search(stripped):
+        raise ValueError(f"Unsafe SQL query rejected: {query!r}")
 
 @tool
 def sql_db_list_tables() -> str:
@@ -65,6 +96,7 @@ def sql_db_query(query: str) -> str:
     If an error is returned, rewrite the query, check the query, and try again.
     If you encounter an issue with Unknown column 'xxxx' in 'field list', use sql_db_schema to query the correct table fields."""
     try:
+        _reject_unsafe_query(query)
         with engine:
             res = engine.execute_query(query)
             if res.is_empty():
