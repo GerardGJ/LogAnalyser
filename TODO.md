@@ -21,7 +21,7 @@ Last audit: 2026-08-24
 | Diagnostic agent | Partial | Agent factory, stack trace tools, PII scrubbing, config-driven model, and deterministic tests are all in place (`tests/test_diagnostics_tools.py`, `tests/test_diagnostic_agent.py`); no graph integration exists yet (Phase 3). |
 | Security agent | Deferred | `src/agents/security_agent.py` intentionally left empty until Router/Synthesizer are working — see workflow decision above. Regex PII scrubbing at the engine/prompt boundary is unaffected and stays active. |
 | Router/planner agent | Complete | `src/agents/router_agent.py` deterministically classifies into a `list["sql" \| "diagnostic"]` route set (empty = unsupported) via keyword regexes, so mixed-intent questions can fan out to both agents; not yet wired into a graph (Phase 3). |
-| Synthesizer agent | Complete | `src/agents/synthesizer_agent.py` deterministically merges whatever routes ran (SQL results, diagnostic summary, warnings) into Markdown with a final PII scrub pass; not yet wired into a graph (Phase 3). |
+| Synthesizer agent | Complete | `src/agents/synthesizer_agent.py` merges whatever routes ran into Markdown: deterministic template for single/no-route cases, an LLM pass (`config/agents.yaml`'s `synthesizer_agent` entry, with template fallback on failure) only when both SQL and diagnostic results are present; final PII scrub pass always applied; not yet wired into a graph (Phase 3). |
 | LangGraph workflow | Not started | `src/graph/` only contains `__init__.py`; no state or workflow definitions. |
 | CLI | Prototype only | `main.py` sends one hard-coded Spanish query to the SQL retry function; no interactive loop or data/bootstrap flow. |
 | Tests | Partial | `uv run pytest` passes for the current single engine test; `tests/test_pii.py` and `tests/test_graph.py` are still empty. |
@@ -118,9 +118,9 @@ Last audit: 2026-08-24
 
 - [x] **2.5 Synthesizer agent**
   - [x] Create `src/agents/synthesizer_agent.py`.
-  - [x] Merge SQL results, diagnostic summaries, execution metadata, and warnings into concise Markdown. `synthesize_response(question, sql_result=None, diagnostic_result=None, errors=None)` is deterministic template assembly (not an LLM call, matching the router's design), rendering `## Root Cause Analysis` and `## Query Results` sections only for routes that actually produced a result (diagnostic-before-sql order, matching `route_query()`), a `## Warnings` section when `errors` is non-empty, and a "No results available" fallback when neither result was provided (the unsupported-route case).
-  - [x] Add final PII scrub pass. `scrub_text()` runs over the fully assembled Markdown (heading, results, warnings) before it's returned — the last of the scrub points documented in `CLAUDE.md`.
-  - [x] Add tests for empty results, tabular results, diagnostic-only results, mixed results, and errors. `tests/test_synthesizer_agent.py` (14 tests) covers all of these plus PII scrubbing across the question/sql/diagnostic inputs and the empty/whitespace-only question fallback heading.
+  - [x] Merge SQL results, diagnostic summaries, execution metadata, and warnings into concise Markdown. `synthesize_response(question, sql_result=None, diagnostic_result=None, errors=None)` uses deterministic template assembly (`## Root Cause Analysis` / `## Query Results` sections only for routes that produced a result, diagnostic-before-sql order matching `route_query()`, `## Warnings` when `errors` is non-empty, "No results available" fallback for the unsupported case) for every case *except* when both a SQL and a diagnostic result are present — there, `get_agent_model("synthesizer_agent")` (new `config/agents.yaml` entry) is used instead to weave the two into one coherent narrative rather than just concatenating them, since reconciling disjoint results into prose is a genuine text-generation task the router's classification problem never had. If that model call raises, it falls back to the deterministic template so a response is still returned.
+  - [x] Add final PII scrub pass. `scrub_text()` runs over the fully assembled Markdown — template or LLM output — before it's returned, the last of the scrub points documented in `CLAUDE.md`.
+  - [x] Add tests for empty results, tabular results, diagnostic-only results, mixed results, and errors. `tests/test_synthesizer_agent.py` (18 tests) covers all of these; single-route/no-route tests assert `get_agent_model` is never called (stay fully deterministic, no mocking needed), while the combined-route tests mock the model (same `FakeModel`-style pattern as `test_sql_agent.py`) to cover prompt content, the LLM-failure fallback, and PII scrubbing of LLM output.
   - Note: this stays standalone until Phase 3 wires it into the graph as the join point for the router's fan-out (see 3.2/3.3 below).
 
 ---
@@ -209,5 +209,5 @@ Last audit: 2026-08-24
 Current pytest result:
 
 ```text
-158 passed
+162 passed
 ```

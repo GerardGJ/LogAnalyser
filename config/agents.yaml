@@ -13,3 +13,7 @@ security_agent:
 query_checker:
   model: "gpt-4o-mini"
   temperature: 0.0
+
+synthesizer_agent:
+  model: "gpt-4o-mini"
+  temperature: 0.3
